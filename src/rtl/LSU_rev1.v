@@ -5,8 +5,8 @@ module lsu (
     input  wire [2:0]  op_size_o,       // funct3 load/store operation selector
     
     // NEW: Explicit control signals required by the new overlapping encoding
-    input  wire        read_en_o,       // 1 if load instruction
-    input  wire        write_en_o,      // 1 if store instruction
+    input  wire        load_en_i,       // 1 if load instruction
+    input  wire        store_en_i,      // 1 if store instruction
     
     output reg  [31:0] core_data_i,     // load data returned to the Datapath
 
@@ -35,7 +35,7 @@ module lsu (
         mem_data_i   = 32'b0;
         byte_write_i = 4'b0000;
 
-        if (write_en_o) begin
+        if (store_en_i) begin
             case (op_size_o)
                 SIZE_B: begin
                     mem_data_i   = {24'b0, core_data_o[7:0]} << (byte_offset * 8);
@@ -63,7 +63,7 @@ module lsu (
         // Default assignment to prevent latches and output clean zeroes when inactive
         core_data_i = 32'b0;
 
-        if (read_en_o) begin
+        if (load_en_i) begin
             case (op_size_o)
                 SIZE_B: begin
                     case (byte_offset)
