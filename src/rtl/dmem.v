@@ -20,8 +20,7 @@ module dmem #(
     wire [ADDR_W-3:0] word_addr = address_i[ADDR_W-1:2];
 
     // Synchronous Write with Byte-Masking
-    // Memory is updated asynchronously.
-  always @(*) begin
+    always @(posedge clk_i) begin
         if (we_i) begin
             // Independent byte-lane writing enforced by the 4-bit mask
             if (bw_i[0]) ram[word_addr][7:0]   <= data_i[7:0];
