@@ -1,3 +1,5 @@
+
+
 //  ---------- INLCUDED BLOCK: MUX2_32  ---------- 
 module MUX2_32 (
   input [31:0] A, 
@@ -171,7 +173,7 @@ endmodule
 module RISCV_Multiplier (
     input wire i_Clk,
     input wire i_Rst,
-    input wire i_Start,
+    input wire i_Mul_Start,
     input wire [31:0] i_Instruction,
     input wire [31:0] i_Multiplier,    // rs1
     input wire [31:0] i_Multiplicand,  // rs2
@@ -235,7 +237,7 @@ module RISCV_Multiplier (
         end else begin
             case (state)
                 STATE_IDLE: begin
-                    if (i_Start) begin
+                  if (i_Mul_Start) begin
                         // Load absolute values into registers
                         prod_reg    <= {32'd0, abs_rs1};
                         m_reg       <= abs_rs2;
@@ -378,16 +380,14 @@ module RISCV_CRC (
     input wire i_Start,
     input wire [31:0] i_Register_Rs_1,
     input wire [31:0] i_Register_Rs_2,
-    input wire [31:0] i_Instruction,
+    input wire [3:0] i_CRC_Sel,
     output reg [31:0] o_Result
 );
 
-    wire [2:0] i_Funct3 = i_Instruction[14:12];
-
-    /* Xicrc Extension Funct3 Encodings */
-    localparam c_FUNCT3_CRCB = 3'b000; // CRC8
-    localparam c_FUNCT3_CRCH = 3'b001; // CRC16
-    localparam c_FUNCT3_CRCW = 3'b010; // CRC32
+    /* FSM Control Signal Encodings (from operation_decoder) */
+    localparam c_OP_CRCB = 4'h0; // CRC8
+    localparam c_OP_CRCH = 4'h1; // CRC16
+    localparam c_OP_CRCW = 4'h2; // CRC32
 
     /* 
      * Placeholder signals for the actual combinatorial CRC calculation.
@@ -406,10 +406,10 @@ module RISCV_CRC (
 
     /* Instruction Decoding Multiplexer */
     always @(*) begin
-        case (i_Funct3)
-            c_FUNCT3_CRCB: o_Result = w_CRC8_Result;
-            c_FUNCT3_CRCH: o_Result = w_CRC16_Result;
-            c_FUNCT3_CRCW: o_Result = w_CRC32_Result;
+        case (i_CRC_Sel)
+            c_OP_CRCB: o_Result = w_CRC8_Result;
+            c_OP_CRCH: o_Result = w_CRC16_Result;
+            c_OP_CRCW: o_Result = w_CRC32_Result;
             default:       o_Result = 32'd0;
         endcase
     end
@@ -460,6 +460,7 @@ module RISCV_BRANCH_COMPARATOR_A (
     input signed [31:0] i_Reg_A,
     input signed [31:0] i_Reg_B,
     input [2:0] i_Branch_Sel,
+    input i_Branch_Valid,
     output reg o_Branch_Taken
 );   
     /* Branches */
@@ -477,15 +478,19 @@ module RISCV_BRANCH_COMPARATOR_A (
     wire w_Branch_Less_Than_Unsigned = ($unsigned(i_Reg_A) < $unsigned(i_Reg_B));
 
     always @ (*) begin
-        case (i_Branch_Sel)
-            c_BEQ:  o_Branch_Taken = w_Branch_Equal;
-            c_BNE:  o_Branch_Taken = !w_Branch_Equal;
-            c_BLT:  o_Branch_Taken = w_Branch_Less_Than_Signed;
-            c_BGE:  o_Branch_Taken = !w_Branch_Less_Than_Signed;
-            c_BLTU: o_Branch_Taken = w_Branch_Less_Than_Unsigned;
-            c_BGEU: o_Branch_Taken = !w_Branch_Less_Than_Unsigned;
-            default: o_Branch_Taken = 1'b0;
-        endcase
+      if (!i_Branch_Valid) begin
+            o_Branch_Taken = 1'b0;
+      end else begin
+          case (i_Branch_Sel)
+              c_BEQ:  o_Branch_Taken = w_Branch_Equal;
+              c_BNE:  o_Branch_Taken = !w_Branch_Equal;
+              c_BLT:  o_Branch_Taken = w_Branch_Less_Than_Signed;
+              c_BGE:  o_Branch_Taken = !w_Branch_Less_Than_Signed;
+              c_BLTU: o_Branch_Taken = w_Branch_Less_Than_Unsigned;
+              c_BGEU: o_Branch_Taken = !w_Branch_Less_Than_Unsigned;
+              default: o_Branch_Taken = 1'b0;
+          endcase
+      end
     end
 
 endmodule
@@ -611,19 +616,29 @@ module top (
   input wire [31:0] i_Instruction,
   input wire [31:0] i_Memory_data,
   input wire i_PC_write_enable,
-  output wire [31:0] o_Memory,
+  output wire [31:0] o_Memory_Address,
   input wire [31:0] i_ZERO,
-  input wire i_write_enable,
   input wire [2:0] i_Write_Back_Sel,
   input wire [3:0] i_ALU_Op,
   input wire i_A_Sel,
   input wire i_B_Sel,
-  input wire i_Start,
+  input wire i_Mul_Start,
   output wire o_Branch_Taken,
   input wire i_MUX_Sel,
   input wire i_Rst,
   input wire i_Clk,
-  input wire [2:0] i_Branch_Sel
+  input wire [2:0] i_Branch_Sel,
+  output wire o_mult_done,
+  input wire i_IR_write_enable,
+  input wire i_MDR_write_enable,
+  input wire i_Register_write_enable,
+  input wire i_registerB_write_enable,
+  input wire i_registerA_write_enable,
+  input wire i_ALUout_write_enable,
+  input wire [3:0] i_CRC_Sel,
+  input wire i_Branch_Valid,
+  output wire [31:0] o_registerB_Rs2,
+  output wire [31:0] o_instruction
 
 );
 
@@ -632,149 +647,154 @@ module top (
  wire [31:0] w_2;
  wire [31:0] w_3;
  wire [31:0] w_4;
+ wire [31:0] w_5;
+ wire [31:0] w_6;
  wire [31:0] w_7;
- wire [31:0] w_8;
- wire [31:0] w_9;
- wire [31:0] w_13;
+ wire [31:0] w_16;
  wire [31:0] w_17;
- wire [31:0] w_18;
- wire [31:0] w_20;
- wire [31:0] w_23;
- wire [31:0] w_24;
- wire [31:0] w_26;
+ wire [31:0] w_25;
  wire [31:0] w_28;
+ wire [31:0] w_29;
+ wire [31:0] w_31;
+ wire [31:0] w_33;
+ wire [31:0] w_34;
+
+//Interface Assigns
+assign o_registerB_Rs2 [31:0] = w_2;
+assign o_instruction [31:0] = w_6;
 
 //Instances of Modules
-RISCV_CRC blk3334_70 (
-         .i_Start (i_Start),
-         .i_Rst (i_Rst),
-         .i_Clk (i_Clk),
-         .i_Register_Rs_1 (w_1),
-         .i_Register_Rs_2 (w_2),
-         .i_Instruction (w_3),
-         .o_Result (w_4)
-     );
-
 RISCV_ALU_4bit blk3287_74 (
          .i_ALU_Op (i_ALU_Op [3:0]),
          .i_A_Sel (i_A_Sel),
          .i_B_Sel (i_B_Sel),
          .i_Register_Rs_1 (w_1),
          .i_Register_Rs_2 (w_2),
-         .i_PC_Output (w_7),
-         .i_Immediate (w_8),
-         .o_Q (w_9)
+         .i_PC_Output (w_3),
+         .i_Immediate (w_4),
+         .o_Q (w_5)
      );
 
 RISCV_IMM_GENERATOR_A blk3362_75 (
-         .o_Immediate (w_8),
-         .i_Instruction (w_3)
-     );
-
-RISCV_BRANCH_COMPARATOR_A blk3363_76 (
-         .o_Branch_Taken (o_Branch_Taken),
-         .i_Branch_Sel (i_Branch_Sel [2:0]),
-         .i_Reg_A (w_1),
-         .i_Reg_B (w_2)
+         .o_Immediate (w_4),
+         .i_Instruction (w_6)
      );
 
 A_register blk2705_77 (
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
+         .write_enable (i_registerA_write_enable),
          .data_out (w_1),
-         .data_in (w_13)
+         .data_in (w_7)
      );
 
 instruction_register blk2703_78 (
          .data_in (i_Instruction [31:0]),
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
-         .data_out (w_3)
+         .write_enable (i_IR_write_enable),
+         .data_out (w_6)
      );
 
 memorydata_register blk2704_79 (
          .data_in (i_Memory_data [31:0]),
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
-         .data_out (w_17)
+         .write_enable (i_MDR_write_enable),
+         .data_out (w_16)
      );
 
 B_register blk2706_80 (
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
+         .write_enable (i_registerB_write_enable),
          .data_out (w_2),
-         .data_in (w_18)
+         .data_in (w_17)
      );
 
 ALU_Out_Register blk2708_81 (
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
-         .data_in (w_9),
-         .data_out (w_20)
+         .write_enable (i_ALUout_write_enable),
+         .data_in (w_5),
+         .data_out (w_25)
      );
 
 PROGRAM_COUNTER_A blk3367_83 (
          .i_PC_write_enable (i_PC_write_enable),
          .i_Rst (i_Rst),
          .i_Clk (i_Clk),
-         .i_Data (w_23),
-         .o_PC_Output (w_24),
-         .o_PC_Plus_4 (w_26)
+         .i_Data (w_28),
+         .o_PC_Output (w_29),
+         .o_PC_Plus_4 (w_31)
      );
 
 MUX2_32 blk1779_84 (
-         .Z (o_Memory [31:0]),
+         .Z (o_Memory_Address [31:0]),
          .S (i_MUX_Sel),
-         .B (w_20),
-         .A (w_24)
+         .B (w_25),
+         .A (w_29)
      );
 
 old_PC_Register blk3485_88 (
-         .write_enable (i_write_enable),
          .reset (i_Rst),
          .clk (i_Clk),
-         .data_out (w_7),
-         .data_in (w_24)
+         .write_enable (i_IR_write_enable),
+         .data_out (w_3),
+         .data_in (w_29)
      );
 
 MUX2_32 blk1779_89 (
          .S (i_MUX_Sel),
-         .B (w_20),
-         .Z (w_23),
-         .A (w_26)
+         .B (w_25),
+         .Z (w_28),
+         .A (w_31)
      );
 
 RISCV_Register3bit_A blkProj14723_102 (
          .i_ZERO (i_ZERO [31:0]),
-         .i_Write_Enable (i_write_enable),
          .i_Write_Back_Sel (i_Write_Back_Sel [2:0]),
          .i_Rst (i_Rst),
          .i_Clk (i_Clk),
-         .i_CRC_Result (w_4),
-         .o_Data_Rs_1 (w_13),
-         .i_Instruction (w_3),
-         .i_Memory_Data (w_17),
-         .o_Data_Rs_2 (w_18),
-         .i_ALU_Output (w_20),
-         .i_PC_Plus_4 (w_26),
-         .i_Multiplier_Result (w_28)
+         .i_Write_Enable (i_Register_write_enable),
+         .o_Data_Rs_1 (w_7),
+         .i_Instruction (w_6),
+         .i_Memory_Data (w_16),
+         .o_Data_Rs_2 (w_17),
+         .i_ALU_Output (w_25),
+         .i_PC_Plus_4 (w_31),
+         .i_CRC_Result (w_33),
+         .i_Multiplier_Result (w_34)
      );
 
-RISCV_Multiplier blk3040_104 (
-         .i_Start (i_Start),
+RISCV_Multiplier blk3040_112 (
+         .i_Mul_Start (i_Mul_Start),
          .i_Rst (i_Rst),
          .i_Clk (i_Clk),
+         .o_Done (o_mult_done),
          .i_Multiplier (w_1),
-         .i_Instruction (w_3),
+         .i_Instruction (w_6),
          .i_Multiplicand (w_2),
-         .o_Result (w_28)
+         .o_Result (w_34)
+     );
+
+RISCV_CRC blk3334_113 (
+         .i_Start (i_Mul_Start),
+         .i_Rst (i_Rst),
+         .i_Clk (i_Clk),
+         .i_CRC_Sel (i_CRC_Sel [3:0]),
+         .i_Register_Rs_1 (w_1),
+         .i_Register_Rs_2 (w_2),
+         .o_Result (w_33)
+     );
+
+RISCV_BRANCH_COMPARATOR_A blk3363_115 (
+         .o_Branch_Taken (o_Branch_Taken),
+         .i_Branch_Sel (i_Branch_Sel [2:0]),
+         .i_Branch_Valid (i_Branch_Valid),
+         .i_Reg_A (w_1),
+         .i_Reg_B (w_2)
      );
 
 
 endmodule
-
